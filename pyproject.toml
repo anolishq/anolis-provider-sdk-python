@@ -1,0 +1,62 @@
+[project]
+name = "anolis-provider-sdk"
+version = "0.1.0"
+description = "Language-native Python SDK for writing Anolis Device Provider Protocol (ADPP) providers"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = [
+    # ADPP protobuf bindings. Not on PyPI: pinned to the release wheel by URL,
+    # as the provider repos pin the conformance harness.
+    "anolis-protocol @ https://github.com/anolishq/anolis-protocol/releases/download/v1.10.0/anolis_protocol-1.10.0-py3-none-any.whl",
+    "PyYAML>=6.0,<7",
+    "jsonschema>=4.17,<5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "anolis-protocol[conformance] @ https://github.com/anolishq/anolis-protocol/releases/download/v1.10.0/anolis_protocol-1.10.0-py3-none-any.whl",
+    "ruff>=0.15.0,<1.0.0",
+    "mypy>=1.13",
+    "pytest>=8",
+    "types-PyYAML>=6.0",
+    "types-protobuf>=5",
+    "types-jsonschema>=4.17",
+]
+
+[project.scripts]
+# The reference provider: a synthetic example the SDK's own CI runs the
+# conformance harness against. Not a hardware provider.
+anolis-provider-reference = "anolis_provider_sdk.reference:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anolis_provider_sdk"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+# Generated protobuf modules ship without type stubs.
+module = ["anolis.*", "protocol_pb2"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -ra"
+markers = ["conformance: runs the anolis-protocol conformance harness against the reference provider"]

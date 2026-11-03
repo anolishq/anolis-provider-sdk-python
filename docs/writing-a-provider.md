@@ -1,0 +1,168 @@
+# Writing a provider
+
+A provider is an executable that the Anolis runtime starts with
+`--config <path>` and talks to over stdin and stdout. This SDK turns a Python
+class into that executable.
+
+The contracts it implements are defined in
+[anolis-protocol](https://github.com/anolishq/anolis-protocol):
+`docs/semantics.md` (ADPP v1), `docs/profiles/framed-stdio-v1.md` (the stdio
+transport) and `docs/profiles/anolis-executable-profile-v1.md` (the command
+line).
+
+## 1. Declare device types
+
+A `DeviceType` lists its signals and functions once. Everything a client sees
+about the device, and every check the SDK applies to a call, comes from this
+declaration.
+
+```python
+from anolis_provider_sdk import Arg, Category, DeviceType, Function, Signal, ValueType
+
+MOTOR = DeviceType(
+    id="dc_motor",
+    signals=(
+        Signal("speed", ValueType.DOUBLE, unit="rpm"),
+        Signal("throttle", ValueType.DOUBLE),
+        Signal("fault_code", ValueType.INT64, default=False),
+    ),
+    functions=(
+        Function("stop", category=Category.ACTUATE),
+        Function(
+            "set_throttle",
+            args=(Arg("throttle", ValueType.DOUBLE, min=-1.0, max=1.0),),
+            results=(Arg("throttle", ValueType.DOUBLE),),
+        ),
+    ),
+)
+```
+
+- **Signals.** Signal ids are snake_case. A read that names no signals returns the
+  `default` ones, so at least one signal must be a default. `poll_hint_hz`
+  (default 1.0) above 0 is what makes the Anolis runtime poll a signal; set it to
+  0 for a signal that should only be read on request.
+- **Functions.** A function's id is its position in `functions`, starting at 1.
+  Append new functions at the end, so existing ids stay stable.
+- **Arguments.** Bounds are inclusive. `allowed_values` restricts a string
+  argument. An argument is required unless `required=False`.
+
+The SDK checks the declaration when it is made: duplicate names, a non-snake_case
+signal id, or bounds on a non-numeric argument raise `ValueError` at import time.
+
+## 2. Implement the provider
+
+```python
+from anolis_provider_sdk import Device, Provider, ProviderError, StatusCode
+
+
+class MotorProvider(Provider):
+    name = "anolis-provider-motor"
+    version = "0.1.0"
+    config_schema = {
+        "type": "object",
+        "properties": {"address": {"type": "integer", "minimum": 0, "maximum": 127}},
+        "required": ["address"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, config):
+        super().__init__(config)  # self.config is the validated config
+        self.driver = None
+
+    def start(self, budget_s):
+        self.driver = open_driver(self.config["address"])  # slow start-up goes here
+
+    def devices(self):
+        return [Device("motor0", MOTOR, label="Motor 0")]
+
+    def read(self, device, signal_ids):
+        state = self.driver.state()
+        return {sid: getattr(state, sid) for sid in signal_ids}
+
+    def call(self, device, function, args):
+        if function.name == "stop":
+            self.driver.set_throttle(0.0)
+            return None
+        if function.name == "set_throttle":
+            self.driver.set_throttle(args["throttle"])
+            return {"throttle": args["throttle"]}
+```
+
+What each method gets and returns:
+
+- **`config`** has already been validated against `config_schema` (JSON Schema
+  Draft 2020-12). The provider refuses to start, and `--check-config` exits 1, on
+  a config that does not match it.
+- **`start(budget_s)`** runs once, after Hello and before the first request after
+  it. Put slow start-up there, so Hello is answered at once. If it raises, the
+  provider keeps serving: `WaitReady` reports `ready=false` and `GetHealth`
+  reports `STATE_FAULT`.
+- **`read`** receives only signal ids the device type declares. Return a value
+  for each one. To report a value with its own quality or observation time,
+  return a `Reading(value, quality=..., timestamp=...)`. A plain value is stamped
+  with the current time and `QUALITY_OK`, and a reading older than the signal's
+  `stale_after_ms` is reported as `STALE`.
+- **`call`** receives a declared function and arguments that have passed
+  validation, already converted to Python values. Return a dict holding every
+  declared result, or `None` when the function declares none.
+- **Errors.** Raise `ProviderError(StatusCode.UNAVAILABLE, "bus not responding")`
+  to answer with a specific status. Any other exception becomes
+  `CODE_INTERNAL`; it is logged, and the provider keeps serving.
+
+Health:
+
+- `health()` and `device_health(device)` default to OK.
+- Override them to report what you know, such as a bus fault or an unreachable
+  device.
+- They are answered on the request path, so return state you already hold. Do
+  not talk to the hardware in them.
+
+## 3. Make it an executable
+
+End the module with:
+
+```python
+if __name__ == "__main__":
+    sys.exit(run(MotorProvider))
+```
+
+You can also expose it as a console script in `pyproject.toml`
+(`[project.scripts]`). The runtime and the conformance harness need one
+executable file to start.
+
+The command line follows the executable profile:
+
+| Command | Does | Exit |
+| --- | --- | --- |
+| `--config <path>` | serve ADPP on stdin/stdout | 0 at end of input, 1 invalid config, 2/3 malformed input |
+| `--check-config <path>` | validate a config | 0 valid, 1 invalid |
+| `--config-schema` | print the config schema envelope | 0 |
+| `--check-host <path>` | print the host requirements the config implies | 0 none unmet, 1 something unmet, 2 invalid config |
+| `--version` | print `name version` | 0 |
+
+To report host requirements, override the `check_host(config)` classmethod and
+return `HostRequirement` entries.
+
+While serving, stdout carries frames only. The SDK points `sys.stdout` at stderr,
+so a stray `print()` in your code or a driver goes to the log instead of
+corrupting the stream.
+
+## 4. Check it
+
+Run the conformance harness against your provider, with a config that needs no
+hardware and a manifest naming your provider:
+
+```sh
+pip install "anolis-protocol[conformance] @ https://github.com/anolishq/anolis-protocol/releases/download/v1.10.0/anolis_protocol-1.10.0-py3-none-any.whl"
+anolis-adpp-conformance --provider-bin "$(command -v anolis-provider-motor)" \
+  --provider-config config/conformance.yaml --provider-profile config/conformance.toml -ra
+```
+
+The reference provider in `src/anolis_provider_sdk/reference.py` is a complete
+example. This repository's CI runs the harness against it.
+
+## YAML
+
+Configs are read with PyYAML, which follows YAML 1.1. An unquoted `yes`, `no`,
+`on` or `off` loads as a boolean. Declare types in `config_schema`, so a value
+that loaded as the wrong type is rejected rather than used.
