@@ -1,0 +1,7 @@
+# Mock config for the conformance harness: two synthetic counters, no hardware.
+devices:
+  - id: counter0
+    label: Counter 0
+  - id: counter1
+    label: Counter 1
+    start: 10
