@@ -16,3 +16,5 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A reference provider (`anolis-provider-reference`, a synthetic counter). It
   passes the anolis-protocol 1.10.0 conformance harness at level 2 with no
   skipped tests, in this repository's CI.
+- A `py.typed` marker (PEP 561), so type checkers read the SDK's annotations
+  in code that builds on it.
