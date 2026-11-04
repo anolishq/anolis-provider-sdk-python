@@ -149,3 +149,44 @@ def test_undecodable_config_is_a_config_error(
     assert run(PumpProvider, [verb, str(path)]) == code
     err = capsys.readouterr().err
     assert err.startswith("anolis-provider-test: ") and "UTF-8" in err and "Traceback" not in err
+
+
+class Numeric(PumpProvider):
+    config_schema = {
+        "type": "object",
+        "properties": {
+            "n": {"type": "integer"},
+            "hz": {"type": "number", "minimum": 0.1, "maximum": 10},
+            "extra": {"type": "object"},
+            "mock": {"type": "boolean"},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "text,reason",
+    [
+        ("n: 2.0\n", "is not of type 'integer'"),  # JSON Schema alone would accept a whole float
+        ("hz: .nan\n", "must be finite"),  # NaN passes every bound comparison
+        ("hz: .inf\n", "must be finite"),
+        ("extra: {deep: [1, -.inf]}\n", "extra/deep/1: a number must be finite"),  # not only where the schema looks
+        ("mock: false\nmock: true\n", "duplicate key 'mock'"),
+    ],
+)
+def test_config_values_json_cannot_mean_are_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str, reason: str
+) -> None:
+    assert run(Numeric, ["--check-config", write(tmp_path, text)]) == 1
+    assert reason in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "n: 2\nhz: 2\n",  # an integer is a number
+        "hz: 2.5\n",
+        "base: &b {n: 1}\nextra:\n  <<: *b\n  m: 2\n",  # a merge key is not a duplicate
+    ],
+)
+def test_ordinary_numbers_and_merge_keys_still_load(tmp_path: Path, text: str) -> None:
+    assert run(Numeric, ["--check-config", write(tmp_path, text)]) == 0

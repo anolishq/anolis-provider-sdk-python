@@ -191,5 +191,15 @@ example. This repository's CI runs the harness against it.
 ## YAML
 
 Configs are read with PyYAML, which follows YAML 1.1. An unquoted `yes`, `no`,
-`on` or `off` loads as a boolean. Declare types in `config_schema`, so a value
-that loaded as the wrong type is rejected rather than used.
+`on` or `off` loads as a boolean, and `010` loads as octal 8. Declare types in
+`config_schema`, so a value that loaded as the wrong type is rejected rather
+than used.
+
+The SDK is stricter than PyYAML and plain JSON Schema in three places, so that
+your code never sees a value JSON could not carry:
+
+- A duplicated mapping key is refused. YAML parsers disagree on which
+  occurrence wins, and the C++ SDK refuses it too. Merge keys (`<<`) still work.
+- A non-finite number (`.nan`, `.inf`) anywhere in the config is refused.
+- Where the schema says `type: integer`, only an integer is accepted: `2.0` is
+  refused, although JSON Schema itself would accept it.

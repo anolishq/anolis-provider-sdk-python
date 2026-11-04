@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -35,6 +36,51 @@ class ConfigError(Exception):
     pass
 
 
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a duplicated mapping key. YAML parsers disagree
+    on which occurrence wins (PyYAML keeps the last, yaml-cpp serves the first),
+    so the C++ SDK refuses the document and so does this one."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        seen: set[Any] = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
+            key = self.construct_object(key_node, deep=True)
+            try:
+                duplicate = key in seen
+                seen.add(key)
+            except TypeError:  # an unhashable key; the base class reports it
+                continue
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping", node.start_mark, f"found duplicate key {key!r}", key_node.start_mark
+                )
+        return super().construct_mapping(node, deep=deep)
+
+
+# JSON Schema counts 2.0 as an integer. A provider that declares an integer
+# expects a Python int, so a float is refused wherever the schema says integer.
+_Validator = jsonschema.validators.extend(  # type: ignore[no-untyped-call]
+    jsonschema.Draft202012Validator,
+    type_checker=jsonschema.Draft202012Validator.TYPE_CHECKER.redefine(
+        "integer", lambda _checker, value: isinstance(value, int) and not isinstance(value, bool)
+    ),
+)
+
+
+def _non_finite(data: Any, path: tuple[Any, ...] = ()) -> tuple[Any, ...] | None:
+    """The path of the first NaN or infinity in ``data``, which JSON cannot carry."""
+    if isinstance(data, float) and not math.isfinite(data):
+        return path
+    items = data.items() if isinstance(data, dict) else enumerate(data) if isinstance(data, list) else ()
+    for key, value in items:
+        found = _non_finite(value, (*path, key))
+        if found is not None:
+            return found
+    return None
+
+
 def config_schema(provider_cls: type[Provider]) -> dict[str, Any]:
     schema = dict(provider_cls.config_schema)
     schema.setdefault("$schema", _SCHEMA_DIALECT)
@@ -45,7 +91,7 @@ def load_config(provider_cls: type[Provider], path: str) -> Mapping[str, Any]:
     """Read a YAML (or JSON) config and validate it against the provider's schema."""
     try:
         with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+            data = yaml.load(f, Loader=_StrictLoader)
     except OSError as err:
         raise ConfigError(f"cannot read {path}: {err.strerror}") from None
     except UnicodeDecodeError as err:
@@ -56,7 +102,10 @@ def load_config(provider_cls: type[Provider], path: str) -> Mapping[str, Any]:
         data = {}
     if not isinstance(data, dict):
         raise ConfigError(f"{path}: the config must be a mapping, not a {type(data).__name__}")
-    validator = jsonschema.Draft202012Validator(config_schema(provider_cls))
+    bad = _non_finite(data)
+    if bad is not None:
+        raise ConfigError(f"{path}: {'/'.join(map(str, bad))}: a number must be finite (JSON has no NaN or infinity)")
+    validator = _Validator(config_schema(provider_cls))
     errors = sorted(validator.iter_errors(data), key=lambda e: list(e.absolute_path))
     if errors:
         lines = [f"  {'/'.join(map(str, e.absolute_path)) or '(root)'}: {e.message}" for e in errors]

@@ -36,3 +36,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of 1 with a traceback.
 - A config file that is not UTF-8 is reported as a config error, not a
   traceback.
+- Configs are loaded strictly: a duplicated mapping key, a non-finite number,
+  and a float where the schema says `integer` are refused rather than passed to
+  the provider.
