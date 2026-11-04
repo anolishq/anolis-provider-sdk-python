@@ -8,9 +8,11 @@ could not evaluate (an invalid config, or check_host raised). Only the JSON enve
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
+import os
 import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -164,15 +166,27 @@ def run(provider_cls: type[Provider], argv: Sequence[str] | None = None) -> int:
 
 
 def _serve(provider_cls: type[Provider], config: Mapping[str, Any]) -> int:
-    # stdout carries frames only. Keep its binary stream for them and point
-    # sys.stdout at stderr, so a stray print() in provider or driver code lands
-    # in the log instead of corrupting the frame stream.
-    frames_out = sys.stdout.buffer
+    # stdout carries frames only. Frames go to a private duplicate of fd 1, and
+    # fd 1 itself (and sys.stdout) points at stderr while serving, so a stray
+    # print(), a C extension's printf or a child process that inherits stdout
+    # lands in the log instead of corrupting the frame stream.
+    sys.stdout.flush()
+    frames_fd = os.dup(1)
+    os.dup2(2, 1)
+    frames_out = os.fdopen(frames_fd, "wb")
     sys.stdout = sys.stderr
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format=f"{provider_cls.name}: %(levelname)s %(message)s")
     try:
-        provider = provider_cls(config)
-    except Exception:
-        logging.getLogger("anolis_provider_sdk").exception("provider failed to initialise")
-        return 1
-    return serve(provider, sys.stdin.buffer, frames_out)
+        try:
+            provider = provider_cls(config)
+        except Exception:
+            logging.getLogger("anolis_provider_sdk").exception("provider failed to initialise")
+            return 1
+        return serve(provider, sys.stdin.buffer, frames_out)
+    finally:
+        if sys.__stdout__ is not None:  # what was written to it while serving belongs to the log
+            with contextlib.suppress(OSError, ValueError):
+                sys.__stdout__.flush()
+        os.dup2(frames_fd, 1)
+        with contextlib.suppress(OSError):  # the reader may be gone
+            frames_out.close()

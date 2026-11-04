@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import shutil
 import signal
 import struct
@@ -81,12 +82,15 @@ def test_author_prints_cannot_corrupt_the_frame_stream(tmp_path: Path) -> None:
     script = tmp_path / "noisy.py"
     script.write_text(
         "from anolis_provider_sdk import Provider, run\n"
-        "import sys\n"
+        "import os, subprocess, sys\n"
         "class Noisy(Provider):\n"
         "    name = 'noisy'\n"
         "    version = '0.0.1'\n"
         "    def devices(self):\n"
         "        print('stray output')\n"
+        "        os.write(1, b'fd-level output\\n')\n"  # what a C extension's printf does
+        "        subprocess.run([sys.executable, '-c', 'print(\"child output\")'], check=True)\n"
+        "        sys.__stdout__.write('buffered original stdout\\n')\n"
         "        return []\n"
         "sys.exit(run(Noisy))\n"
     )
@@ -103,7 +107,8 @@ def test_author_prints_cannot_corrupt_the_frame_stream(tmp_path: Path) -> None:
         timeout=10,
     )
     assert proc.returncode == 0, proc.stderr.decode()
-    assert b"stray output" in proc.stderr
+    for noise in (b"stray output", b"fd-level output", b"child output", b"buffered original stdout"):
+        assert noise in proc.stderr
     # stdout holds exactly two well-formed frames.
     data, offset, ids = proc.stdout, 0, []
     while offset < len(data):
@@ -212,3 +217,27 @@ def test_sigterm_ends_the_session_in_order_and_runs_stop(tmp_path: Path) -> None
     assert proc.wait(timeout=10) == 0
     assert proc.stderr.read().count(b"STOP RAN") == 1
     proc.stdin.close()
+
+
+def test_stdout_is_restored_when_serving_returns(tmp_path: Path) -> None:
+    script = tmp_path / "embedded.py"
+    script.write_text(
+        "import os\n"
+        "from anolis_provider_sdk import Provider, run\n"
+        "class Quiet(Provider):\n"
+        "    name = 'quiet'\n"
+        "    version = '0.0.1'\n"
+        "code = run(Quiet, ['--config', os.environ['CFG']])\n"
+        "os.write(1, b'after %d' % code)\n"
+    )
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("{}\n")
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        input=b"",
+        capture_output=True,
+        timeout=10,
+        env={**os.environ, "CFG": str(cfg)},
+    )
+    assert proc.returncode == 0, proc.stderr.decode()
+    assert proc.stdout == b"after 0"

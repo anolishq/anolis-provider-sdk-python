@@ -170,9 +170,12 @@ and details, and `GetHealth` reports `STATE_FAULT`. Otherwise `WaitReady`
 reports `host_check=ok`. A `check_host` that raises at startup is logged and does
 not block `start`, as an `unknown` requirement would not.
 
-While serving, stdout carries frames only. The SDK points `sys.stdout` at stderr,
-so a stray `print()` in your code or a driver goes to the log instead of
-corrupting the stream.
+While serving, stdout carries frames only. The SDK writes frames to a private
+copy of file descriptor 1 and points fd 1 itself, and `sys.stdout`, at stderr.
+A stray `print()`, a C extension writing to fd 1, or a child process that
+inherits stdout therefore goes to the log instead of corrupting the stream.
+Output written at import time, before `run()` is called, still reaches the real
+stdout, so do not print at import.
 
 ## 4. Check it
 

@@ -39,3 +39,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Configs are loaded strictly: a duplicated mapping key, a non-finite number,
   and a float where the schema says `integer` are refused rather than passed to
   the provider.
+- While serving, file descriptor 1 points at stderr and frames go to a private
+  duplicate of it, so a child process or a C-level write cannot corrupt the
+  frame stream. Before, only `sys.stdout` was redirected.
