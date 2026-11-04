@@ -72,6 +72,10 @@ class ProviderError(Exception):
         self.details = dict(details or {})
 
 
+# What the ArgSpec min/max fields for each integer type can carry.
+_INTEGER_RANGE = {ValueType.INT64: (-(2**63), 2**63 - 1), ValueType.UINT64: (0, 2**64 - 1)}
+
+
 def _unique(kind: str, names: Sequence[str]) -> None:
     seen: set[str] = set()
     for name in names:
@@ -103,6 +107,11 @@ class Arg:
                 raise ValueError(f"argument {self.name!r}: bounds must be finite")
             if bound is not None and self.type in (ValueType.INT64, ValueType.UINT64) and bound != int(bound):
                 raise ValueError(f"argument {self.name!r}: bounds on an integer type must be whole numbers")
+            limits = _INTEGER_RANGE.get(self.type)
+            if bound is not None and limits is not None and not limits[0] <= bound <= limits[1]:
+                raise ValueError(
+                    f"argument {self.name!r}: bound {bound} does not fit {self.type.name} [{limits[0]}, {limits[1]}]"
+                )
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ValueError(f"argument {self.name!r}: min {self.min} is above max {self.max}")
         if self.allowed_values and self.type is not ValueType.STRING:

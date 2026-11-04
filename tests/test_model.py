@@ -50,3 +50,30 @@ def test_bounds_only_on_numeric_args_and_min_not_above_max() -> None:
         Arg("x", ValueType.DOUBLE, min=2.0, max=1.0)
     with pytest.raises(ValueError, match="allowed_values"):
         Arg("x", ValueType.DOUBLE, allowed_values=("a",))
+
+
+@pytest.mark.parametrize(
+    "vtype,lo,hi",
+    [
+        (ValueType.UINT64, -1, None),
+        (ValueType.UINT64, None, 2**64),
+        (ValueType.INT64, -(2**63) - 1, None),
+        (ValueType.INT64, None, 2**63),
+        (ValueType.INT64, None, float(2**63)),  # rounds to 2**63, one past INT64_MAX
+    ],
+)
+def test_integer_bounds_must_fit_the_wire_type(vtype: ValueType, lo: float | None, hi: float | None) -> None:
+    with pytest.raises(ValueError, match="does not fit"):
+        Arg("x", vtype, min=lo, max=hi)
+
+
+def test_full_range_integer_bounds_are_describable() -> None:
+    from anolis.deviceprovider.v1 import types_pb2
+
+    from anolis_provider_sdk.session import _fill_arg
+
+    for arg in (
+        Arg("u", ValueType.UINT64, min=0, max=2**64 - 1),
+        Arg("i", ValueType.INT64, min=-(2**63), max=2**63 - 1),
+    ):
+        _fill_arg(arg, types_pb2.ArgSpec())  # raises ValueError if the field cannot hold the bound
