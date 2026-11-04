@@ -59,6 +59,10 @@ def load_config(provider_cls: type[Provider], path: str) -> Mapping[str, Any]:
     if errors:
         lines = [f"  {'/'.join(map(str, e.absolute_path)) or '(root)'}: {e.message}" for e in errors]
         raise ConfigError(f"{path} does not match the config schema:\n" + "\n".join(lines))
+    try:
+        provider_cls.check_config(data)
+    except ValueError as err:
+        raise ConfigError(f"{path}: {err}") from None
     return data
 
 

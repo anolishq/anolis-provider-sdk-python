@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import io
 import shutil
+import signal
 import struct
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 from anolis.deviceprovider.v1 import envelope_pb2, status_pb2
+
+from anolis_provider_sdk import Provider, serve
 
 REPO = Path(__file__).resolve().parents[1]
 CONFIG = REPO / "config" / "conformance.yaml"
@@ -107,3 +113,102 @@ def test_author_prints_cannot_corrupt_the_frame_stream(tmp_path: Path) -> None:
         ids.append(resp.request_id)
         offset += 4 + n
     assert ids == [1, 2]
+
+
+# ---- Provider.stop: once, on every way out of the loop ----------------------
+
+
+class Recorder(Provider):
+    name = "recorder"
+    version = "0.0.1"
+
+    def __init__(self, config: Mapping[str, Any], fail_stop: bool = False) -> None:
+        super().__init__(config)
+        self.stops = 0
+        self.fail_stop = fail_stop
+
+    def stop(self) -> None:
+        self.stops += 1
+        if self.fail_stop:
+            raise RuntimeError("stop broke")
+
+
+def hello_frame() -> bytes:
+    req = envelope_pb2.Request(request_id=1)
+    req.hello.protocol_version = "v1"
+    return frame(req.SerializeToString())
+
+
+class BrokenPipeOut(io.BytesIO):
+    def write(self, data: Any) -> int:
+        raise BrokenPipeError
+
+
+class FailingOut(io.BytesIO):
+    def write(self, data: Any) -> int:
+        raise OSError("disk on fire")
+
+
+@pytest.mark.parametrize(
+    "payload,out,code",
+    [
+        (hello_frame(), io.BytesIO(), 0),  # clean EOF
+        (struct.pack("<I", 10) + b"abc", io.BytesIO(), 2),  # framing error
+        (frame(b"\xde\xad not protobuf \x00\x01"), io.BytesIO(), 3),  # unparseable request
+        (hello_frame(), BrokenPipeOut(), 0),  # the reader went away
+    ],
+)
+def test_stop_runs_once_on_every_exit(payload: bytes, out: io.BytesIO, code: int) -> None:
+    provider = Recorder({})
+    assert serve(provider, io.BytesIO(payload), out) == code
+    assert provider.stops == 1
+
+
+def test_stop_runs_when_the_loop_raises() -> None:
+    provider = Recorder({})
+    with pytest.raises(OSError):
+        serve(provider, io.BytesIO(hello_frame()), FailingOut())
+    assert provider.stops == 1
+
+
+def test_a_failing_stop_is_logged_and_keeps_the_exit_code(caplog: pytest.LogCaptureFixture) -> None:
+    provider = Recorder({}, fail_stop=True)
+    assert serve(provider, io.BytesIO(struct.pack("<I", 10)), io.BytesIO()) == 2
+    assert provider.stops == 1
+    assert "provider stop failed" in caplog.text
+
+
+def test_serve_restores_the_previous_sigterm_handler() -> None:
+    before = signal.getsignal(signal.SIGTERM)
+    serve(Recorder({}), io.BytesIO(b""), io.BytesIO())
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_sigterm_ends_the_session_in_order_and_runs_stop(tmp_path: Path) -> None:
+    script = tmp_path / "stoppable.py"
+    script.write_text(
+        "from anolis_provider_sdk import Provider, run\n"
+        "import sys\n"
+        "class Stoppable(Provider):\n"
+        "    name = 'stoppable'\n"
+        "    version = '0.0.1'\n"
+        "    def stop(self):\n"
+        "        sys.stderr.write('STOP RAN\\n')\n"
+        "sys.exit(run(Stoppable))\n"
+    )
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("{}\n")
+    proc = subprocess.Popen(
+        [sys.executable, str(script), "--config", str(cfg)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdin is not None and proc.stderr is not None
+    proc.stdin.write(hello_frame())
+    proc.stdin.flush()
+    assert read_response(proc).request_id == 1  # the loop is now blocked reading stdin
+    proc.send_signal(signal.SIGTERM)
+    assert proc.wait(timeout=10) == 0
+    assert proc.stderr.read().count(b"STOP RAN") == 1
+    proc.stdin.close()
