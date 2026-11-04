@@ -127,3 +127,25 @@ def test_serving_refuses_a_semantically_invalid_config_before_construction(tmp_p
 def test_reference_provider_refuses_duplicate_device_ids(tmp_path: Path) -> None:
     path = write(tmp_path, "devices:\n  - id: c0\n  - id: c0\n")
     assert run(ReferenceProvider, ["--check-config", path]) == 1
+
+
+def test_check_host_that_raises_cannot_evaluate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    class Unreadable(PumpProvider):
+        @classmethod
+        def check_host(cls, config: object) -> list[HostRequirement]:
+            raise PermissionError("Permission denied: '/dev/i2c-1'")
+
+    assert run(Unreadable, ["--check-host", write(tmp_path, "{}\n")]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and "Permission denied" in captured.err
+
+
+@pytest.mark.parametrize("verb,code", [("--check-config", 1), ("--config", 1), ("--check-host", 2)])
+def test_undecodable_config_is_a_config_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], verb: str, code: int
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_bytes(b"fail_read: \xff\xfe\n")
+    assert run(PumpProvider, [verb, str(path)]) == code
+    err = capsys.readouterr().err
+    assert err.startswith("anolis-provider-test: ") and "UTF-8" in err and "Traceback" not in err

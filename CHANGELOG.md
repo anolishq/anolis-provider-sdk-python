@@ -26,3 +26,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   express. It runs after schema validation for `--check-config`, `--check-host`
   and `--config`, so `--check-config` refuses what the provider would refuse.
   The reference provider uses it to refuse duplicate device ids.
+
+### Fixed
+
+- The host requirement check now runs at startup too (executable profile §6).
+  On an unmet requirement the provider stays up but not ready, exposes no
+  devices, and reports `host_check` and `host_unmet` in `WaitReady`.
+- `--check-host` exits 2 (could not evaluate) when `check_host` raises, instead
+  of 1 with a traceback.
+- A config file that is not UTF-8 is reported as a config error, not a
+  traceback.

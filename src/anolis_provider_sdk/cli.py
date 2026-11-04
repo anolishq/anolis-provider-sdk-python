@@ -3,7 +3,7 @@ docs/profiles/anolis-executable-profile-v1.md §1, §2, §6).
 
 Exit codes: 0 success; 1 an invalid config (--check-config, --config) or an
 unmet host requirement (--check-host); 2 a usage error, or --check-host that
-could not evaluate. Only the JSON envelopes and --version ever go to stdout.
+could not evaluate (an invalid config, or check_host raised). Only the JSON envelopes and --version ever go to stdout.
 """
 
 from __future__ import annotations
@@ -48,6 +48,8 @@ def load_config(provider_cls: type[Provider], path: str) -> Mapping[str, Any]:
             data = yaml.safe_load(f)
     except OSError as err:
         raise ConfigError(f"cannot read {path}: {err.strerror}") from None
+    except UnicodeDecodeError as err:
+        raise ConfigError(f"{path} is not UTF-8 text: {err.reason} at byte {err.start}") from None
     except yaml.YAMLError as err:
         raise ConfigError(f"{path} is not valid YAML: {err}") from None
     if data is None:
@@ -94,7 +96,11 @@ def run(provider_cls: type[Provider], argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"{name}: config valid\n")
         return 0
     if verb == "--check-host":
-        requirements = list(provider_cls.check_host(config))
+        try:
+            requirements = list(provider_cls.check_host(config))
+        except Exception as err:
+            sys.stderr.write(f"{name}: could not evaluate the host requirements: {type(err).__name__}: {err}\n")
+            return 2  # §6: could not evaluate
         envelope = {
             "check_host_version": 1,
             "provider": name,

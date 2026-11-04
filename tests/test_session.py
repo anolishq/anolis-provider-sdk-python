@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from anolis.deviceprovider.v1 import envelope_pb2, health_pb2, status_pb2, telemetry_pb2, value_pb2
 
-from anolis_provider_sdk import Session
+from anolis_provider_sdk import HostRequirement, Session
 
 from .conftest import PumpProvider
 
@@ -326,3 +326,69 @@ def test_failed_start_keeps_serving_and_reports_it(session: Session) -> None:
     assert resp.status.code == OK
     assert resp.get_health.provider.state == health_pb2.ProviderHealth.STATE_FAULT
     assert "no such bus" in resp.get_health.provider.message
+
+
+# ---- executable profile §6: the host check at startup -------------------------
+
+
+class HostBound(PumpProvider):
+    requirements: list[HostRequirement] = []
+    raises = False
+    started = False
+
+    @classmethod
+    def check_host(cls, config: object) -> list[HostRequirement]:
+        if cls.raises:
+            raise PermissionError("cannot inspect /dev/i2c-1")
+        return cls.requirements
+
+    def start(self, budget_s: float) -> None:
+        HostBound.started = True
+
+
+def host_bound(requirements: list[HostRequirement], raises: bool = False) -> Session:
+    HostBound.requirements, HostBound.raises, HostBound.started = requirements, raises, False
+    return ready(Session(HostBound({})))
+
+
+def wait_ready(session: Session) -> dict[str, str]:
+    req = envelope_pb2.Request(request_id=20)
+    req.wait_ready.SetInParent()
+    return dict(session.handle(req).wait_ready.diagnostics)
+
+
+def test_met_host_requirements_report_host_check_ok() -> None:
+    session = host_bound([HostRequirement("bus.present", "met"), HostRequirement("bus.speed", "unknown")])
+    diags = wait_ready(session)
+    assert diags["host_check"] == "ok" and "host_unmet" not in diags
+    assert diags["ready"] == "true" and diags["device_count"] == "1" and HostBound.started
+
+
+def test_unmet_host_requirement_stays_up_not_ready_and_says_why() -> None:
+    session = host_bound(
+        [
+            HostRequirement("bus.present", "met"),
+            HostRequirement("bus.access", "unmet", detail="permission denied on /dev/i2c-1", remedy="add to i2c"),
+            HostRequirement("bus.speed", "unmet"),
+        ]
+    )
+    diags = wait_ready(session)
+    assert diags["ready"] == "false" and diags["host_check"] == "unmet"
+    assert diags["host_unmet"] == "bus.access: permission denied on /dev/i2c-1; bus.speed"
+    assert diags["device_count"] == "0" and not HostBound.started
+    listing = envelope_pb2.Request(request_id=21)
+    listing.list_devices.SetInParent()
+    resp = session.handle(listing)
+    assert resp.status.code == OK and not resp.list_devices.devices
+    assert read(session).status.code == NOT_FOUND
+    health = envelope_pb2.Request(request_id=22)
+    health.get_health.SetInParent()
+    provider_health = session.handle(health).get_health.provider
+    assert provider_health.state == health_pb2.ProviderHealth.STATE_FAULT
+    assert "bus.access" in provider_health.message
+
+
+def test_a_host_check_that_cannot_run_does_not_block_start() -> None:
+    session = host_bound([], raises=True)
+    diags = wait_ready(session)
+    assert diags["ready"] == "true" and "host_check" not in diags and HostBound.started

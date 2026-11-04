@@ -10,7 +10,7 @@ import logging
 import signal
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, BinaryIO
 
 from anolis.deviceprovider.v1 import envelope_pb2, health_pb2, status_pb2
@@ -67,6 +67,9 @@ class Session:
         self._hello_done = False
         self._started = False
         self._start_error: str | None = None
+        # Executable profile §6: the --check-host checks, run again at startup.
+        self._host_check: str | None = None  # "ok" or "unmet"; None if they could not run
+        self._host_unmet = ""
         self._init_ms = 0
         self._last_seen: dict[str, float] = {}
 
@@ -105,12 +108,31 @@ class Session:
             return
         self._started = True
         began = time.monotonic()
-        try:
-            self.provider.start(budget_s)
-        except Exception as err:
-            log.exception("provider start failed")
-            self._start_error = f"{type(err).__name__}: {err}"[:512]
+        self._run_host_check()
+        if self._host_check == "unmet":
+            # §6: stay up and not ready, exposing no devices, rather than exit.
+            log.error("host requirements unmet: %s", self._host_unmet)
+        else:
+            try:
+                self.provider.start(budget_s)
+            except Exception as err:
+                log.exception("provider start failed")
+                self._start_error = f"{type(err).__name__}: {err}"[:512]
         self._init_ms = int((time.monotonic() - began) * 1000)
+
+    def _run_host_check(self) -> None:
+        try:
+            requirements = list(type(self.provider).check_host(self.provider.config))
+        except Exception:
+            # Could not evaluate: like an `unknown` requirement, this does not block start.
+            log.exception("host check could not run")
+            return
+        unmet = [f"{r.id}: {r.detail}" if r.detail else r.id for r in requirements if r.status == "unmet"]
+        self._host_check = "unmet" if unmet else "ok"
+        self._host_unmet = "; ".join(unmet)[:512]
+
+    def _devices(self) -> Sequence[Device]:
+        return [] if self._host_check == "unmet" else self.provider.devices()
 
     # ---- handshake ------------------------------------------------------------
 
@@ -137,16 +159,20 @@ class Session:
     def _wait_ready(self, req: Any, resp: Any) -> None:
         d = resp.wait_ready.diagnostics
         d["init_time_ms"] = str(self._init_ms)
-        d["ready"] = "false" if self._start_error else "true"
-        d["device_count"] = str(len(self.provider.devices()))
+        d["ready"] = "false" if self._start_error or self._host_check == "unmet" else "true"
+        d["device_count"] = str(len(self._devices()))
         d["provider_impl"] = f"{self.provider.name} {self.provider.version} (anolis-provider-sdk {__version__})"
+        if self._host_check is not None:
+            d["host_check"] = self._host_check
+        if self._host_unmet:
+            d["host_unmet"] = self._host_unmet
         if self._start_error:
             d["start_error"] = self._start_error
 
     # ---- inventory ------------------------------------------------------------
 
     def _device(self, device_id: str) -> Device:
-        for device in self.provider.devices():
+        for device in self._devices():
             if device.id == device_id:
                 return device
         raise _fail(StatusCode.NOT_FOUND, f"unknown device_id {_quote(device_id)}")
@@ -162,7 +188,7 @@ class Session:
 
     def _list_devices(self, req: Any, resp: Any) -> None:
         resp.list_devices.SetInParent()
-        for device in self.provider.devices():
+        for device in self._devices():
             self._fill_device(device, resp.list_devices.devices.add())
             if req.include_health:
                 self._fill_device_health(device, resp.list_devices.device_health.add())
@@ -292,14 +318,17 @@ class Session:
     def _get_health(self, req: Any, resp: Any) -> None:
         health = self.provider.health()
         provider = resp.get_health.provider
-        if self._start_error:
+        if self._host_check == "unmet":
+            provider.state = health_pb2.ProviderHealth.STATE_FAULT
+            provider.message = f"host requirements unmet: {self._host_unmet}"
+        elif self._start_error:
             provider.state = health_pb2.ProviderHealth.STATE_FAULT
             provider.message = f"start failed: {self._start_error}"
         else:
             provider.state = _PROVIDER_STATE[health.state]
             provider.message = health.message
         provider.metrics.update(health.metrics)
-        for device in self.provider.devices():
+        for device in self._devices():
             self._fill_device_health(device, resp.get_health.devices.add())
 
 
