@@ -6,7 +6,9 @@ global `AGENTS.md` and are not repeated here.
 ## Build / test
 
 - `just setup`, `just check` (ruff format, ruff lint, `mypy --strict`), `just test` (pytest).
-- `just check && just test` is what CI runs; the required status check is the **`ok`** job.
+- `just check && just test` covers CI's `check` and `test` jobs. CI also runs the org docs check
+  (markdownlint, a VitePress build and an offline link check on `README.md` and `docs/`), which no
+  just recipe runs; the required status check is the **`ok`** job, which needs all three.
 - `tests/test_conformance.py` runs the anolis-protocol conformance harness against the
   reference provider. The harness is the oracle: a skip it reports fails the test unless it
   is listed in `EXPECTED_SKIPS` with a reason.

@@ -1,4 +1,5 @@
-# anolis-provider-sdk-python dev commands. `check` + `test` are what CI runs.
+# anolis-provider-sdk-python dev commands. `check` + `test` match CI's check and
+# test jobs; CI's docs check (markdownlint, link check) has no recipe here.
 
 # List available recipes
 default:

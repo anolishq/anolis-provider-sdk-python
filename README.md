@@ -18,8 +18,9 @@ It is a language-native implementation of the same contracts the C++
 are checked by the same conformance harness from
 [anolis-protocol](https://github.com/anolishq/anolis-protocol).
 
-> **Status: v0.1.0.** The bundled reference provider passes the anolis-protocol 1.10.0 conformance harness at
-> conformance level 2, with no skipped tests. Not yet published to PyPI.
+> **Status: unreleased (0.1.0 in development).** No version has been tagged yet. The bundled reference
+> provider passes the anolis-protocol 1.10.0 conformance harness at conformance level 2, with no skipped
+> tests. Not yet published to PyPI.
 
 ## A provider in brief
 
