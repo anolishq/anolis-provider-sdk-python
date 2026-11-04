@@ -33,6 +33,7 @@ COUNTER = DeviceType(
             "increment",
             description="Add step to the count when enabled",
             results=(Arg("count", ValueType.INT64, description="The count after the call"),),
+            category=Category.CONFIG,
         ),
         Function(
             "set_step",
@@ -49,7 +50,9 @@ COUNTER = DeviceType(
             args=(Arg("limit", ValueType.UINT64, min=1, max=1_000_000, description="Largest allowed count"),),
             category=Category.CONFIG,
         ),
-        Function("set_enabled", args=(Arg("enabled", ValueType.BOOL),), category=Category.ACTUATE),
+        # CONFIG, not ACTUATE: the runtime's zero_is_safe rung can only drive an
+        # ACTUATE function through a required numeric argument, and this one has none.
+        Function("set_enabled", args=(Arg("enabled", ValueType.BOOL),), category=Category.CONFIG),
     ),
 )
 

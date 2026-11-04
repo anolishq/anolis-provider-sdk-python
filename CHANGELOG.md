@@ -45,3 +45,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - An `INT64` or `UINT64` argument bound outside the type's range raises
   `ValueError` when it is declared, instead of failing every `DescribeDevice`
   with `CODE_INTERNAL`.
+- The reference provider declares `increment` and `set_enabled` as `CONFIG`
+  rather than `ACTUATE`: neither has a required numeric argument, so the
+  runtime's `zero_is_safe` rung could not drive them.
