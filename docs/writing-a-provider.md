@@ -155,11 +155,20 @@ The command line follows the executable profile:
 | `--config <path>` | serve ADPP on stdin/stdout | 0 at end of input or on `SIGTERM`, 1 invalid config, 2/3 malformed input |
 | `--check-config <path>` | validate a config | 0 valid, 1 invalid |
 | `--config-schema` | print the config schema envelope | 0 |
-| `--check-host <path>` | print the host requirements the config implies | 0 none unmet, 1 something unmet, 2 invalid config |
+| `--check-host <path>` | print the host requirements the config implies | 0 none unmet, 1 something unmet, 2 invalid config or `check_host` raised |
 | `--version` | print `name version` | 0 |
 
 To report host requirements, override the `check_host(config)` classmethod and
-return `HostRequirement` entries.
+return `HostRequirement` entries. Keep it read-only: inspect device nodes and
+parameters, do not talk to the hardware.
+
+The SDK also runs `check_host` at startup, before `start`, as the executable
+profile's §6 asks. If a requirement is `unmet`, the provider stays up but not
+ready: `start` is not called, it exposes no devices, `WaitReady` reports
+`ready=false`, `host_check=unmet` and a `host_unmet` summary of the unmet ids
+and details, and `GetHealth` reports `STATE_FAULT`. Otherwise `WaitReady`
+reports `host_check=ok`. A `check_host` that raises at startup is logged and does
+not block `start`, as an `unknown` requirement would not.
 
 While serving, stdout carries frames only. The SDK points `sys.stdout` at stderr,
 so a stray `print()` in your code or a driver goes to the log instead of
