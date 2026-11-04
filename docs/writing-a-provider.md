@@ -47,7 +47,9 @@ MOTOR = DeviceType(
   argument. An argument is required unless `required=False`.
 
 The SDK checks the declaration when it is made: duplicate names, a non-snake_case
-signal id, or bounds on a non-numeric argument raise `ValueError` at import time.
+signal id, bounds on a non-numeric argument, or an integer bound outside its
+type's range (a negative bound on a `UINT64`, say) raise `ValueError` at import
+time.
 
 ## 2. Implement the provider
 

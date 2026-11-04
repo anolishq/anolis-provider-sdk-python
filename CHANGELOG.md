@@ -42,3 +42,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - While serving, file descriptor 1 points at stderr and frames go to a private
   duplicate of it, so a child process or a C-level write cannot corrupt the
   frame stream. Before, only `sys.stdout` was redirected.
+- An `INT64` or `UINT64` argument bound outside the type's range raises
+  `ValueError` when it is declared, instead of failing every `DescribeDevice`
+  with `CODE_INTERNAL`.
