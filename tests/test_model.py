@@ -77,3 +77,15 @@ def test_full_range_integer_bounds_are_describable() -> None:
         Arg("i", ValueType.INT64, min=-(2**63), max=2**63 - 1),
     ):
         _fill_arg(arg, types_pb2.ArgSpec())  # raises ValueError if the field cannot hold the bound
+
+
+def test_reference_actuate_functions_can_be_driven_to_zero() -> None:
+    # The runtime's zero_is_safe rung calls an ACTUATE function with every required
+    # argument set to 0, and refuses one with none or with a non-numeric one.
+    from anolis_provider_sdk import Category
+    from anolis_provider_sdk.reference import COUNTER
+
+    for f in COUNTER.functions:
+        if f.category is Category.ACTUATE:
+            required = [a for a in f.args if a.required]
+            assert required and all(a.type.numeric for a in required), f.name
