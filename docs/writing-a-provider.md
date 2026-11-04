@@ -220,6 +220,43 @@ anolis-adpp-conformance --provider-bin "$(command -v anolis-provider-motor)" \
 The reference provider in `src/anolis_provider_sdk/reference.py` is a complete
 example. This repository's CI runs the harness against it.
 
+## Vendor drivers
+
+A provider for one vendor's boards drives them through that vendor's own
+drivers, so a user of the vendor's boards finds the code they already know.
+Two rules keep the provider from becoming a fork of the vendor's ecosystem.
+
+**A driver the vendor lacks is staged, not buried.** When the vendor publishes
+no driver for a chip on one of its boards, write one in its own package inside
+the provider repository (the SparkFun provider's `anolis_qwiic_staging` is the
+example), not inside a board module:
+
+- write it in the vendor's driver conventions and against the vendor's bus
+  interface, so it can be offered as it stands;
+- it imports nothing from the provider, and a test enforces that;
+- open an issue in the provider repository to track offering it;
+- offer it to the vendor once it has run on real hardware;
+- delete it when the vendor publishes it, and switch to the published package.
+
+A driver that another vendor publishes does not count: each provider covers
+its own vendor's boards.
+
+**A bug in a vendor driver is reported upstream and worked around here, marked
+for removal:**
+
+- Report it to the vendor as an issue, with a reproduction that uses only the
+  vendor's driver, after checking their tracker for an existing report. Open a
+  pull request only once the issue is acknowledged or the fix is trivial.
+- Work around it in the board module, behind the driver's public interface.
+  Never patch the installed package or keep a patched copy of it. A workaround
+  that would amount to rewriting the driver means staging a driver instead.
+- Put a link to the upstream issue in a comment at the workaround, and name the
+  issue in the pull request that adds it.
+- Add a test that pins the bug: it exercises the vendor's driver directly,
+  asserts the buggy behaviour, and links the same issue. When a dependency
+  update brings the fix, that test fails, and it is the signal to remove the
+  workaround and the test together.
+
 ## YAML
 
 Configs are read with PyYAML, which follows YAML 1.1. An unquoted `yes`, `no`,
