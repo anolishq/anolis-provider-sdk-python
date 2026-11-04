@@ -27,12 +27,13 @@ MOTOR = DeviceType(
         Signal("fault_code", ValueType.INT64, default=False),
     ),
     functions=(
-        Function("stop", category=Category.ACTUATE),
         Function(
             "set_throttle",
             args=(Arg("throttle", ValueType.DOUBLE, min=-1.0, max=1.0),),
             results=(Arg("throttle", ValueType.DOUBLE),),
+            category=Category.ACTUATE,
         ),
+        Function("clear_fault", category=Category.CONFIG),
     ),
 )
 ```
@@ -43,6 +44,15 @@ MOTOR = DeviceType(
   0 for a signal that should only be read on request.
 - **Functions.** A function's id is its position in `functions`, starting at 1.
   Append new functions at the end, so existing ids stay stable.
+- **Categories.** `category` defaults to `Category.ACTUATE`, so a function
+  declared without one is an output the runtime's e-stop must cover. Give every
+  `ACTUATE` function a required numeric argument for which 0 is the safe value,
+  as `set_throttle` has. The runtime's `zero_is_safe` rung drives an output by
+  calling it with every required argument set to 0; it refuses a function with
+  no arguments or with a required boolean, string or bytes argument, and reports
+  it as not driven. A command such as `stop` or `clear_fault` is not an output
+  in that sense: declare it `CONFIG`, and stop the motor with
+  `set_throttle(0)`.
 - **Arguments.** Bounds are inclusive. `allowed_values` restricts a string
   argument. An argument is required unless `required=False`.
 
@@ -86,8 +96,8 @@ class MotorProvider(Provider):
             self.driver.set_throttle(0.0)  # the safe state, however the session ends
 
     def call(self, device, function, args):
-        if function.name == "stop":
-            self.driver.set_throttle(0.0)
+        if function.name == "clear_fault":
+            self.driver.clear_fault()
             return None
         if function.name == "set_throttle":
             self.driver.set_throttle(args["throttle"])
@@ -113,6 +123,14 @@ What each method gets and returns:
   return a `Reading(value, quality=..., timestamp=...)`. A plain value is stamped
   with the current time and `QUALITY_OK`, and a reading older than the signal's
   `stale_after_ms` is reported as `STALE`.
+- **A signal you cannot read.** ADPP has no value-less signal: in a `CODE_OK`
+  read every value carries a `Value` of the declared type, so a
+  `Reading(None, ...)` fails the whole read with `CODE_INTERNAL`. When the device cannot
+  be read at all, raise `ProviderError(StatusCode.UNAVAILABLE, ...)`. When one
+  signal of several is bad, return a placeholder of the declared type with
+  `quality=Quality.FAULT` (or `UNKNOWN`): `math.nan` for a `DOUBLE` cannot be
+  mistaken for a real reading, as `0.0` can. A consumer must read `quality`
+  before the value.
 - **`call`** receives a declared function and arguments that have passed
   validation, already converted to Python values. Return a dict holding every
   declared result, or `None` when the function declares none.
@@ -125,6 +143,15 @@ What each method gets and returns:
   exception from it is logged and does not change the exit code. `SIGTERM` ends
   the session with exit 0 once `stop()` has run. The C++ SDK's equivalent is
   `LifecycleHooks::on_shutdown`.
+- **Deadlines.** Hello advertises `supports_deadlines=true`, and the SDK
+  handles a call's deadline for you, as follows. It checks the deadline once,
+  before `call` runs: an expired call is refused with `CODE_DEADLINE_EXCEEDED`
+  and nothing is done. It does not interrupt `call`. If the deadline passes while
+  `call` runs, the call completes, and the SDK then answers
+  `CODE_DEADLINE_EXCEEDED` with `side_effects=possible` in the status details,
+  because its effects may have happened (semantics.md §8.4). `call` is not
+  given the deadline, and the SDK makes no attempt to cancel a call that is
+  running, so keep `call` short and do not start long waits in it.
 - **Errors.** Raise `ProviderError(StatusCode.UNAVAILABLE, "bus not responding")`
   to answer with a specific status. Any other exception becomes
   `CODE_INTERNAL`; it is logged, and the provider keeps serving.
