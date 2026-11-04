@@ -88,6 +88,14 @@ class ReferenceProvider(Provider):
         "additionalProperties": False,
     }
 
+    @classmethod
+    def check_config(cls, config: Mapping[str, Any]) -> None:
+        seen: set[str] = set()
+        for entry in config.get("devices", []):
+            if entry["id"] in seen:
+                raise ValueError(f"device id {entry['id']!r} is configured twice")
+            seen.add(entry["id"])
+
     def __init__(self, config: Mapping[str, Any]) -> None:
         super().__init__(config)
         entries = config.get("devices", [])

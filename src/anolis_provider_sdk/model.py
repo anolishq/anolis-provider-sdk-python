@@ -303,6 +303,27 @@ class Provider:
         """None lets the SDK report OK with the time of the last successful read."""
         return None
 
+    def stop(self) -> None:
+        """Called exactly once when the session ends, however it ends.
+
+        That is stdin EOF (the runtime closed the pipe or went away), a framing
+        or decode error, a broken pipe, SIGTERM, or an exception in the loop.
+        Drive outputs to their safe state here: on hardware without a watchdog
+        they otherwise hold their last value after the provider exits. It may
+        run without ``start`` having run. An exception from it is logged and
+        does not change the exit code. The default does nothing.
+        """
+
+    @classmethod
+    def check_config(cls, config: Mapping[str, Any]) -> None:
+        """Refuse a config that ``config_schema`` accepts but this provider would not.
+
+        Raise ``ValueError`` with a message (duplicate ids, two devices on one
+        address). Called after schema validation, for ``--check-config``,
+        ``--check-host`` and before the provider is constructed for
+        ``--config``, so all three agree. The default accepts everything.
+        """
+
     @classmethod
     def check_host(cls, config: Mapping[str, Any]) -> Sequence[HostRequirement]:
         """What this config needs from the host. Read-only; see --check-host."""

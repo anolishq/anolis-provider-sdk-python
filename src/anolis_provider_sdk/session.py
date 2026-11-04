@@ -7,6 +7,8 @@ tested request by request. ``serve`` runs it over framed stdio.
 from __future__ import annotations
 
 import logging
+import signal
+import threading
 import time
 from collections.abc import Mapping
 from typing import Any, BinaryIO
@@ -353,11 +355,48 @@ def _deadline(req: Any) -> float:
     return float(ts.seconds + ts.nanos / 1e9)
 
 
+class _Terminated(BaseException):
+    """Raised by the SIGTERM handler. A BaseException, so that neither the
+    session's error handling nor a provider's ``except Exception`` swallows it."""
+
+
 def serve(provider: Provider, stdin: BinaryIO, stdout: BinaryIO) -> int:
     """Run a session over framed stdio until EOF. Returns the process exit code:
     0 on a clean EOF, 2 on a framing error, 3 on an unparseable request
-    (framed-stdio v1 §4)."""
-    session = Session(provider)
+    (framed-stdio v1 §4), and 0 on SIGTERM, which ends the session in order.
+
+    ``provider.stop()`` runs exactly once on every way out of the loop. SIGTERM
+    is handled only when ``serve`` runs on the main thread, where Python
+    delivers signals; the previous handler is restored on return.
+    """
+    previous: Any = None
+    on_main_thread = threading.current_thread() is threading.main_thread()
+    terminating = False
+
+    def on_sigterm(signum: int, frame: Any) -> None:
+        nonlocal terminating
+        if not terminating:  # a second SIGTERM must not interrupt stop()
+            terminating = True
+            raise _Terminated
+
+    if on_main_thread:
+        previous = signal.signal(signal.SIGTERM, on_sigterm)
+    try:
+        return _loop(Session(provider), stdin, stdout)
+    except _Terminated:
+        log.info("SIGTERM: ending the session")
+        return 0
+    finally:
+        terminating = True
+        try:
+            provider.stop()
+        except Exception:
+            log.exception("provider stop failed")
+        if on_main_thread:
+            signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
+
+
+def _loop(session: Session, stdin: BinaryIO, stdout: BinaryIO) -> int:
     while True:
         try:
             payload = read_frame(stdin)

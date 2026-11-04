@@ -18,3 +18,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   skipped tests, in this repository's CI.
 - A `py.typed` marker (PEP 561), so type checkers read the SDK's annotations
   in code that builds on it.
+- `Provider.stop()`, called exactly once when the session ends (EOF, a framing
+  or decode error, a broken pipe, an exception in the loop, or `SIGTERM`, which
+  now ends the session in order with exit 0). An actuating provider drives its
+  outputs safe there.
+- `Provider.check_config(config)`, a classmethod for checks a schema cannot
+  express. It runs after schema validation for `--check-config`, `--check-host`
+  and `--config`, so `--check-config` refuses what the provider would refuse.
+  The reference provider uses it to refuse duplicate device ids.

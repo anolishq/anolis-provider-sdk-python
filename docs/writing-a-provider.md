@@ -79,6 +79,10 @@ class MotorProvider(Provider):
         state = self.driver.state()
         return {sid: getattr(state, sid) for sid in signal_ids}
 
+    def stop(self):
+        if self.driver is not None:
+            self.driver.set_throttle(0.0)  # the safe state, however the session ends
+
     def call(self, device, function, args):
         if function.name == "stop":
             self.driver.set_throttle(0.0)
@@ -93,6 +97,11 @@ What each method gets and returns:
 - **`config`** has already been validated against `config_schema` (JSON Schema
   Draft 2020-12). The provider refuses to start, and `--check-config` exits 1, on
   a config that does not match it.
+- **`check_config(config)`** is a classmethod for what a schema cannot say:
+  duplicate device ids, two devices on one address. Raise `ValueError` with a
+  message. The SDK calls it after schema validation for `--check-config`,
+  `--check-host` and `--config` (before your constructor runs), so a config that
+  `--check-config` accepts is one the provider will start with.
 - **`start(budget_s)`** runs once, after Hello and before the first request after
   it. Put slow start-up there, so Hello is answered at once. If it raises, the
   provider keeps serving: `WaitReady` reports `ready=false` and `GetHealth`
@@ -105,6 +114,15 @@ What each method gets and returns:
 - **`call`** receives a declared function and arguments that have passed
   validation, already converted to Python values. Return a dict holding every
   declared result, or `None` when the function declares none.
+- **`stop()`** runs exactly once when the session ends, however it ends: stdin
+  EOF (the runtime shut down, crashed or closed the pipe), a malformed frame, a
+  broken pipe, `SIGTERM`, or an exception in the loop. It is the place to drive
+  outputs to their safe state (zero the motors, close the valves), because on
+  hardware without a watchdog an output holds its last value after the provider
+  exits. It can run without `start` having run, so check what you opened. An
+  exception from it is logged and does not change the exit code. `SIGTERM` ends
+  the session with exit 0 once `stop()` has run. The C++ SDK's equivalent is
+  `LifecycleHooks::on_shutdown`.
 - **Errors.** Raise `ProviderError(StatusCode.UNAVAILABLE, "bus not responding")`
   to answer with a specific status. Any other exception becomes
   `CODE_INTERNAL`; it is logged, and the provider keeps serving.
@@ -134,7 +152,7 @@ The command line follows the executable profile:
 
 | Command | Does | Exit |
 | --- | --- | --- |
-| `--config <path>` | serve ADPP on stdin/stdout | 0 at end of input, 1 invalid config, 2/3 malformed input |
+| `--config <path>` | serve ADPP on stdin/stdout | 0 at end of input or on `SIGTERM`, 1 invalid config, 2/3 malformed input |
 | `--check-config <path>` | validate a config | 0 valid, 1 invalid |
 | `--config-schema` | print the config schema envelope | 0 |
 | `--check-host <path>` | print the host requirements the config implies | 0 none unmet, 1 something unmet, 2 invalid config |
