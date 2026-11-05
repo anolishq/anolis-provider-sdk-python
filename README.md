@@ -56,6 +56,12 @@ if __name__ == "__main__":
 
 See [docs/writing-a-provider.md](docs/writing-a-provider.md) for the full guide.
 
+To start a provider, use the template:
+[anolis-provider-template-python](https://github.com/anolishq/anolis-provider-template-python)
+is a working provider on this SDK (simulated heaters) with CI, a frozen
+single-binary release, the conformance harness and a rename script. Click
+**Use this template**, then run `scripts/rename.sh <kind>`.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/) and [just](https://just.systems/).

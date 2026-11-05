@@ -4,6 +4,11 @@ A provider is an executable that the Anolis runtime starts with
 `--config <path>` and talks to over stdin and stdout. This SDK turns a Python
 class into that executable.
 
+The quickest start is the
+[template](https://github.com/anolishq/anolis-provider-template-python): a
+working provider with CI, release and the conformance harness already set up.
+This guide explains what it contains and how to change it.
+
 The contracts it implements are defined in
 [anolis-protocol](https://github.com/anolishq/anolis-protocol):
 `docs/semantics.md` (ADPP v1), `docs/profiles/framed-stdio-v1.md` (the stdio
